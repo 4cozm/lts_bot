@@ -55,11 +55,15 @@ class TTSHandler:
             self._is_speaking.set()
             try:
                 engine = self._get_engine(lang)
-                # MeloTTS: speaker_id는 hps.data.spk2id에서 조회 (문자열 키 → 정수 ID)
-                spk2id = getattr(getattr(engine, "hps", None), "data", None) and getattr(engine.hps.data, "spk2id", None)
-                if spk2id:
-                    voice = self.VOICE_BY_LANG.get(lang, "KR")
-                    speaker_id = spk2id.get(voice, next(iter(spk2id.values())))
+                # MeloTTS: hps.data.spk2id는 HParams 객체(중첩 dict가 HParams로 로드됨). .get() 대신 getattr 사용.
+                hps = getattr(engine, "hps", None)
+                data = getattr(hps, "data", None) if hps else None
+                spk2id = getattr(data, "spk2id", None) if data else None
+                voice = self.VOICE_BY_LANG.get(lang, "KR")
+                if spk2id is not None:
+                    speaker_id = getattr(spk2id, voice, None)
+                    if speaker_id is None:
+                        speaker_id = next(iter(spk2id.values()), 0)
                 else:
                     speaker_id = 0
                 engine.tts_to_file(text=text, speaker_id=speaker_id, output_path="_tmp_tts.wav")
