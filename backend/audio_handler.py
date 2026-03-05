@@ -200,10 +200,16 @@ class AudioHandler:
                 if silence_sec >= self.silence_threshold:
                     if utterance_started:
                         audio_bytes = b"".join(voiced_frames)
-                        logger.info("오디오 수집완료 (%.2fs), copy 재생 후 STT 전송", len(audio_bytes) / (self.sample_rate * 2))
+                        dur_sec = len(audio_bytes) / (self.sample_rate * 2)
+                        logger.info("오디오 수집완료 (%.2fs), copy 재생 후 STT 전송", dur_sec)
                         if self.on_gemini_invoked:
                             self.on_gemini_invoked()
+                        logger.info("AI(STT) 호출 시작 (%.0f bytes)", len(audio_bytes))
                         text = await self.session_manager.transcribe(audio_bytes)
+                        if text:
+                            logger.info("AI(STT) 응답 수신: %s", text[:80] + ("..." if len(text) > 80 else ""))
+                        else:
+                            logger.info("AI(STT) 응답 없음")
                         voiced_frames = []
                         silence_sec = 0.0
                         utterance_started = False

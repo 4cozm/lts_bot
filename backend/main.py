@@ -85,12 +85,16 @@ class VoiceAssistantApp:
                     continue
 
                 if self.mode == AssistantMode.TRANSLATION_MODE:
+                    logger.info("AI(LLM) 번역 요청 시작 (target=%s)", self.translation_target_lang)
                     translated = self.llm.translate_text(result.text, self.translation_target_lang)
+                    logger.info("AI(LLM) 번역 완료")
                     self.tts.speak(translated, lang=self.translation_target_lang)
                     continue
 
                 # 게이트 통과한 발화는 모두 명령으로 처리 (OK 홍걸 웨이크 게이트 없음)
+                logger.info("AI(LLM) 명령 분석 요청 시작")
                 action = self.llm.plan_action(result.text)
+                logger.info("AI(LLM) 명령 분석 완료: action=%s", action.get("action", "none"))
                 await self._execute_action(action)
             except Exception as exc:
                 logger.exception("런루프 예외: %s", exc)

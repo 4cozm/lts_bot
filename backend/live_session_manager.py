@@ -132,6 +132,7 @@ class LiveSessionManager:
                 )
                 self._session = await self._session_cm.__aenter__()
                 self._receive_task = asyncio.create_task(self._receive_loop())
+                logger.info("Live 세션 연결됨 (model=%s)", LIVE_MODEL)
                 return True
             except Exception as e:
                 self._on_error(f"Live 세션 연결 실패: {e}")
@@ -145,6 +146,7 @@ class LiveSessionManager:
                     self._session_cm = client.aio.live.connect(model=LIVE_MODEL, config=config_retry)
                     self._session = await self._session_cm.__aenter__()
                     self._receive_task = asyncio.create_task(self._receive_loop())
+                    logger.info("Live 세션 재시도 연결됨")
                     return True
                 except Exception:
                     return False
@@ -171,6 +173,7 @@ class LiveSessionManager:
         if not audio_bytes or len(audio_bytes) < MIN_AUDIO_BYTES:
             return ""
         if self._session is None:
+            logger.info("Live 세션 없음, 연결 시도...")
             ok = await self.ensure_connected()
             if not ok:
                 return ""
@@ -184,11 +187,18 @@ class LiveSessionManager:
             session = self._session
         if session is None:
             return ""
+        logger.info("Live API 오디오 전송 중 (%d bytes)...", len(audio_bytes))
         try:
-            await session.send_realtime_input(audio=blob, end_of_turn=True)
+            # send_realtime_input 인자: audio, audio_stream_end(스트림 끝 신호). end_of_turn은 미지원.
+            await session.send_realtime_input(audio=blob, audio_stream_end=True)
+            logger.info("Live API 전송 완료, 전사 대기 중...")
+        except TypeError:
+            # audio_stream_end 미지원 구버전 SDK
+            await session.send_realtime_input(audio=blob)
+            logger.info("Live API 전송 완료, 전사 대기 중...")
         except AttributeError:
             try:
-                await session.send(audio=blob, end_of_turn=True)
+                await session.send(input=blob, end_of_turn=True)
             except Exception as e:
                 self._on_error(f"Live 오디오 전송 실패: {e}")
                 return ""
@@ -204,7 +214,9 @@ class LiveSessionManager:
                     self._session_cm = None
             return ""
         try:
-            return await asyncio.wait_for(self._transcript_queue.get(), timeout=30.0)
+            text = await asyncio.wait_for(self._transcript_queue.get(), timeout=30.0)
+            logger.info("Live API 전사 수신 완료")
+            return text
         except asyncio.TimeoutError:
             self._on_error("Live 전사 응답 시간 초과")
             return ""
