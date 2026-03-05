@@ -144,7 +144,7 @@ class LiveSessionManager:
             config_dict: dict = {
                 "response_modalities": ["AUDIO"],
                 "output_audio_transcription": {},
-                "input_audio_transcription": True,
+                "input_audio_transcription": {},
             }
             if self._resumption_handle:
                 config_dict["session_resumption"] = {"handle": self._resumption_handle}
