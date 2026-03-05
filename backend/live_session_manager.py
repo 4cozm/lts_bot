@@ -410,16 +410,8 @@ class LiveSessionManager:
             except (TypeError, ValueError) as e:
                 logger.info("[Live RAW] audio_stream_end 미지원 또는 오류 (무시): %s", e)
 
-            # (1) 턴 종료 트리거: RealtimeInput만으로는 서버가 턴 완료로 인식하지 않을 수 있음.
-            #     clientContent.turnComplete 명시 전송으로 응답/전사 생성 시작 유도.
-            try:
-                if hasattr(session, "send_client_content"):
-                    await session.send_client_content(turn_complete=True)
-                    logger.info("[Live RAW] send_client_content(turn_complete=True) 전송 완료 (총 경과 %.3fs)", _time.perf_counter() - send_start)
-                else:
-                    logger.info("[Live RAW] send_client_content 없음 (턴 종료 명시 불가)")
-            except (TypeError, ValueError, AttributeError) as e:
-                logger.info("[Live RAW] send_client_content(turn_complete=True) 실패(무시): %s", e)
+            # send_client_content(turn_complete=True)만 보내면 1007 Invalid argument 발생 가능(빈 ClientContent).
+            # 턴 종료는 audio_stream_end로만 신호하고, clientContent는 사용하지 않음.
 
             logger.info("[Live RAW] 전송 끝. transcript_queue.get() 대기 (timeout=30s)...")
         except AttributeError as e:
