@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import sys
 from enum import Enum
 from pathlib import Path
 
@@ -125,8 +126,10 @@ def main() -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, app.stop)
+    # add_signal_handler는 Unix 전용 (Windows 미지원)
+    if sys.platform != "win32":
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, app.stop)
 
     try:
         loop.run_until_complete(app._run_loop())
