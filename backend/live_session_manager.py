@@ -71,14 +71,37 @@ class LiveSessionManager:
                     else:
                         # This segment not resumable or no handle
                         self._resumption_handle = None
-                # Transcript: native-audio 모델은 response_modalities=AUDIO 사용 시 전사는 output_transcription 등으로 옴
+                # Transcript: 입력 전사는 input_audio_transcription / server_content 또는 msg 최상위에 올 수 있음
                 text = None
-                if hasattr(msg, "server_content") and msg.server_content:
+                def _str_from(val):
+                    if val is None:
+                        return None
+                    if isinstance(val, str):
+                        return val
+                    if isinstance(val, bytes):
+                        return val.decode("utf-8", errors="replace")
+                    t = getattr(val, "text", None) or getattr(val, "content", None)
+                    if t is not None:
+                        return t if isinstance(t, str) else (t.decode("utf-8", errors="replace") if isinstance(t, bytes) else str(t))
+                    if hasattr(val, "get"):
+                        t = val.get("text") or val.get("content")
+                        return t if isinstance(t, str) else (str(t) if t is not None else None)
+                    return str(val) if val else None
+
+                # 최상위 메시지 필드 (일부 SDK는 여기로 전사 전달)
+                for key in ("input_audio_transcription", "inputAudioTranscription", "output_transcription", "outputTranscription", "text"):
+                    val = getattr(msg, key, None)
+                    if val is not None:
+                        text = _str_from(val)
+                        if text and text.strip():
+                            break
+                if text is None and hasattr(msg, "server_content") and msg.server_content:
                     sc = msg.server_content
-                    # AUDIO 모드 전사 (output_transcription / input_audio_transcription)
-                    text = getattr(sc, "output_transcription", None) or getattr(sc, "outputTranscription", None)
+                    text = _str_from(getattr(sc, "output_transcription", None) or getattr(sc, "outputTranscription", None))
                     if text is None:
-                        text = getattr(sc, "input_audio_transcription", None) or getattr(sc, "inputAudioTranscription", None)
+                        inv = getattr(sc, "input_audio_transcription", None) or getattr(sc, "inputAudioTranscription", None)
+                        if inv is not None:
+                            text = _str_from(inv)
                     if text is None and hasattr(sc, "model_turn") and sc.model_turn and hasattr(sc.model_turn, "parts"):
                         for part in sc.model_turn.parts or []:
                             if getattr(part, "text", None):
@@ -86,6 +109,8 @@ class LiveSessionManager:
                                 break
                     if text is None and hasattr(msg, "text"):
                         text = msg.text
+                if text is not None and not isinstance(text, str):
+                    text = str(text) if text else None
                 if text is not None and isinstance(text, str) and text.strip():
                     t = text.strip()
                     # 서버가 오류 메시지를 텍스트로 보낼 수 있음 (e.g. "Cannot extract voices from a non-audio request")
@@ -94,6 +119,11 @@ class LiveSessionManager:
                         self._transcript_queue.put_nowait("")
                     else:
                         self._transcript_queue.put_nowait(t)
+                elif logger.isEnabledFor(logging.DEBUG) and hasattr(msg, "server_content") and msg.server_content:
+                    # 전사 추출 실패 시 수신 구조 힌트 (DEBUG 레벨)
+                    sc = msg.server_content
+                    keys = [k for k in dir(sc) if not k.startswith("_")]
+                    logger.debug("Live 수신: 전사 없음, server_content keys=%s", keys[:30])
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -110,25 +140,18 @@ class LiveSessionManager:
                 return True
             client = self._get_client()
             # native-audio 모델은 response_modalities에 TEXT 미지원 → 1007 발생. AUDIO만 사용.
-            # 전사는 server_content.output_transcription 에서 수신 (output_audio_transcription 설정 시).
-            config_dict: dict = {"response_modalities": ["AUDIO"], "output_audio_transcription": {}}
+            # 입력 전사(STT)를 받으려면 input_audio_transcription 필요.
+            config_dict: dict = {
+                "response_modalities": ["AUDIO"],
+                "output_audio_transcription": {},
+                "input_audio_transcription": True,
+            }
             if self._resumption_handle:
                 config_dict["session_resumption"] = {"handle": self._resumption_handle}
             try:
-                from google.genai import types  # type: ignore
-                if self._resumption_handle:
-                    config = types.LiveConnectConfig(
-                        response_modalities=["AUDIO"],
-                        session_resumption=types.SessionResumptionConfig(handle=self._resumption_handle),
-                    )
-                else:
-                    config = types.LiveConnectConfig(response_modalities=["AUDIO"])
-            except Exception:
-                config = config_dict
-            try:
                 self._session_cm = client.aio.live.connect(
                     model=LIVE_MODEL,
-                    config=config,
+                    config=config_dict,
                 )
                 self._session = await self._session_cm.__aenter__()
                 self._receive_task = asyncio.create_task(self._receive_loop())
