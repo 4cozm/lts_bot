@@ -40,7 +40,12 @@ pip install websockets google-generativeai google-genai pyaudio sounddevice soun
 ```
 
 - **STT**: Gemini Developer API (AI Studio) Live API 사용. `google-genai` 패키지 필요.
-- **TTS**: MeloTTS 사용 환경에 따라 해당 패키지 및 모델이 필요할 수 있습니다.
+- **TTS (MeloTTS)**: PyPI의 `melotts` 패키지는 Windows에서 빌드 오류가 나는 경우가 있으므로, GitHub에서 직접 설치하는 것을 권장합니다.
+  ```bash
+  pip install git+https://github.com/myshell-ai/MeloTTS.git
+  python -m unidic download
+  ```
+  MeloTTS 모델은 `backend/models/melo` 등 코드에서 지정한 경로에 두면 됩니다.
 - 블루투스 PTT 키는 앱에서 감지하지 않음. 대신 **레벨·길이 게이트**로 발화 판단(일정 이상 음성이 일정 시간 이상일 때만 전송). 선택 환경 변수: `AUDIO_GATE_THRESHOLD`, `AUDIO_GATE_MIN_DURATION_SEC`.
 
 ## 3) 실행 (빌드/테스트 서버)
