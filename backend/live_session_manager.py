@@ -2,9 +2,8 @@
 
 - Connects to Live API (AI Studio) with optional session resumption handle.
 - Sends 16 kHz PCM audio and collects transcript from server messages.
-- Handles SessionResumptionUpdate: stores new_handle when resumable and present;
-  otherwise treats as non-resumable and uses Plan B (new session on next connect).
-- Receive loop runs in background; does not block event loop.
+- turn_complete 신호가 오면 해당 턴에서 누적된 전사 텍스트를 큐에 넣음.
+  → 텍스트가 없어도 빈 문자열을 넣어 transcribe()가 타임아웃되지 않도록 함.
 """
 
 from __future__ import annotations
@@ -23,6 +22,30 @@ AUDIO_PCM_MIME = "audio/pcm;rate=16000"
 MIN_AUDIO_BYTES = 3200
 
 
+def _extract_text(val) -> Optional[str]:
+    """객체/str/bytes/dict에서 텍스트 문자열 추출."""
+    if val is None:
+        return None
+    if isinstance(val, str):
+        return val or None
+    if isinstance(val, bytes):
+        return val.decode("utf-8", errors="replace") or None
+    # Pydantic 모델 / 일반 객체: .text 또는 .content 우선
+    for attr in ("text", "content", "transcript"):
+        t = getattr(val, attr, None)
+        if t and isinstance(t, str):
+            return t
+        if t and isinstance(t, bytes):
+            return t.decode("utf-8", errors="replace")
+    # dict
+    if hasattr(val, "get"):
+        for key in ("text", "content", "transcript"):
+            t = val.get(key)
+            if t and isinstance(t, str):
+                return t
+    return None
+
+
 class LiveSessionManager:
     """Manages Gemini Live API WebSocket session: connect, send audio, receive transcript and resumption."""
 
@@ -30,9 +53,10 @@ class LiveSessionManager:
         self._on_error = on_error
         self._client = None
         self._session = None
-        self._session_cm = None  # async context manager for connect()
+        self._session_cm = None
         self._receive_task: Optional[asyncio.Task] = None
         self._resumption_handle: Optional[str] = None
+        # turn_complete마다 그 턴의 전사 결과를 넣는 큐 (str, 빈 문자열 포함)
         self._transcript_queue: asyncio.Queue[str] = asyncio.Queue()
         self._lock = asyncio.Lock()
         self._closed = False
@@ -52,95 +76,111 @@ class LiveSessionManager:
             raise
 
     async def _receive_loop(self) -> None:
-        """Consume session.receive(); push transcripts and resumption updates."""
+        """Consume session.receive().
+        - 한 턴의 전사 텍스트를 누적하고, turn_complete가 오면 큐에 넣음.
+        - 텍스트가 없어도 turn_complete 시점에 빈 문자열을 넣어 transcribe()가 대기하지 않도록 함.
+        """
         session = self._session
         if session is None:
             return
+
+        # 현재 턴에서 누적된 전사 텍스트
+        turn_texts: list[str] = []
+
+        def _flush_turn():
+            result = " ".join(turn_texts).strip()
+            turn_texts.clear()
+            self._transcript_queue.put_nowait(result)
+            logger.info("전사 턴 완료: %s", result[:80] + ("..." if len(result) > 80 else "") if result else "(없음)")
+
         try:
             async for msg in session.receive():
                 if self._closed:
                     break
-                # Session resumption: check resumable first, then new_handle
-                if hasattr(msg, "session_resumption_update") and msg.session_resumption_update:
-                    su = msg.session_resumption_update
-                    resumable = getattr(su, "resumable", False) or (getattr(su, "resumable", None) is True)
-                    new_handle = getattr(su, "new_handle", None) or getattr(su, "new_handle", "")
+
+                # ── Session resumption ──────────────────────────────────────
+                su = getattr(msg, "session_resumption_update", None)
+                if su:
+                    resumable = getattr(su, "resumable", False)
+                    new_handle = getattr(su, "new_handle", None)
                     if resumable and new_handle:
                         self._resumption_handle = new_handle
-                        logger.debug("Session resumption handle stored")
+                        logger.debug("Resumption handle updated")
                     else:
-                        # This segment not resumable or no handle
                         self._resumption_handle = None
-                # Transcript: 입력 전사는 input_audio_transcription / server_content 또는 msg 최상위에 올 수 있음
-                text = None
-                def _str_from(val):
-                    if val is None:
-                        return None
-                    if isinstance(val, str):
-                        return val
-                    if isinstance(val, bytes):
-                        return val.decode("utf-8", errors="replace")
-                    t = getattr(val, "text", None) or getattr(val, "content", None)
-                    if t is not None:
-                        return t if isinstance(t, str) else (t.decode("utf-8", errors="replace") if isinstance(t, bytes) else str(t))
-                    if hasattr(val, "get"):
-                        t = val.get("text") or val.get("content")
-                        return t if isinstance(t, str) else (str(t) if t is not None else None)
-                    return str(val) if val else None
 
-                # 최상위 메시지 필드 (일부 SDK는 여기로 전사 전달)
-                for key in ("input_audio_transcription", "inputAudioTranscription", "output_transcription", "outputTranscription", "text"):
-                    val = getattr(msg, key, None)
-                    if val is not None:
-                        text = _str_from(val)
-                        if text and text.strip():
+                # ── 전사 텍스트 수집 ────────────────────────────────────────
+                sc = getattr(msg, "server_content", None)
+                if sc:
+                    # input_audio_transcription: 사용자가 말한 내용 전사 (STT 핵심)
+                    for attr in ("input_audio_transcription", "inputAudioTranscription"):
+                        t = _extract_text(getattr(sc, attr, None))
+                        if t:
+                            logger.debug("input_audio_transcription: %s", t)
+                            turn_texts.append(t)
                             break
-                if text is None and hasattr(msg, "server_content") and msg.server_content:
-                    sc = msg.server_content
-                    text = _str_from(getattr(sc, "output_transcription", None) or getattr(sc, "outputTranscription", None))
-                    if text is None:
-                        inv = getattr(sc, "input_audio_transcription", None) or getattr(sc, "inputAudioTranscription", None)
-                        if inv is not None:
-                            text = _str_from(inv)
-                    if text is None and hasattr(sc, "model_turn") and sc.model_turn and hasattr(sc.model_turn, "parts"):
-                        for part in sc.model_turn.parts or []:
-                            if getattr(part, "text", None):
-                                text = part.text
+
+                    # output_transcription: 모델 음성 전사 (텍스트가 없을 때 보조)
+                    if not turn_texts:
+                        for attr in ("output_transcription", "outputTranscription"):
+                            t = _extract_text(getattr(sc, attr, None))
+                            if t:
+                                logger.debug("output_transcription: %s", t)
+                                turn_texts.append(t)
                                 break
-                    if text is None and hasattr(msg, "text"):
-                        text = msg.text
-                if text is not None and not isinstance(text, str):
-                    text = str(text) if text else None
-                if text is not None and isinstance(text, str) and text.strip():
-                    t = text.strip()
-                    # 서버가 오류 메시지를 텍스트로 보낼 수 있음 (e.g. "Cannot extract voices from a non-audio request")
-                    if "non-audio" in t.lower() or "cannot extract voices" in t.lower():
-                        self._on_error(t)
-                        self._transcript_queue.put_nowait("")
+
+                    # model_turn.parts[].text (TEXT 모달리티 응답 혹은 일부 SDK 버전)
+                    if not turn_texts:
+                        model_turn = getattr(sc, "model_turn", None)
+                        if model_turn:
+                            for part in getattr(model_turn, "parts", None) or []:
+                                t = getattr(part, "text", None)
+                                if t:
+                                    logger.debug("model_turn.part.text: %s", t)
+                                    turn_texts.append(t)
+
+                    # turn_complete → 큐에 넣기 (텍스트 없어도 빈 문자열로 신호)
+                    if getattr(sc, "turn_complete", False):
+                        _flush_turn()
+                        continue
+
+                    # 서버 오류 메시지 감지
+                    raw_text = _extract_text(getattr(sc, "text", None)) or _extract_text(getattr(msg, "text", None))
+                    if raw_text:
+                        low = raw_text.lower()
+                        if "non-audio" in low or "cannot extract voices" in low:
+                            self._on_error(raw_text)
+                            _flush_turn()  # 빈 문자열로 신호
+                        elif raw_text not in turn_texts:
+                            turn_texts.append(raw_text)
+
+                # 메시지 최상위 text (일부 SDK 버전)
+                top_text = _extract_text(getattr(msg, "text", None))
+                if top_text and top_text not in turn_texts:
+                    low = top_text.lower()
+                    if "non-audio" in low or "cannot extract voices" in low:
+                        self._on_error(top_text)
+                        _flush_turn()
                     else:
-                        self._transcript_queue.put_nowait(t)
-                elif logger.isEnabledFor(logging.DEBUG) and hasattr(msg, "server_content") and msg.server_content:
-                    # 전사 추출 실패 시 수신 구조 힌트 (DEBUG 레벨)
-                    sc = msg.server_content
-                    keys = [k for k in dir(sc) if not k.startswith("_")]
-                    logger.debug("Live 수신: 전사 없음, server_content keys=%s", keys[:30])
+                        turn_texts.append(top_text)
+
         except asyncio.CancelledError:
             pass
         except Exception as e:
             if not self._closed:
                 self._on_error(f"Live 수신 루프 오류: {e}")
-            logger.exception("receive_loop")
+            logger.exception("receive_loop error")
 
     async def ensure_connected(self) -> bool:
-        """Connect or reconnect; use resumption handle if available (and resumable)."""
+        """Connect or reconnect; use resumption handle if available."""
         async with self._lock:
             if self._closed:
                 return False
             if self._session is not None:
                 return True
             client = self._get_client()
-            # native-audio 모델은 response_modalities에 TEXT 미지원 → 1007 발생. AUDIO만 사용.
-            # 입력 전사(STT)를 받으려면 input_audio_transcription 필요.
+            # native-audio 모델은 TEXT 미지원(→ 1007). AUDIO만 사용.
+            # input_audio_transcription: 사용자 음성 전사 요청.
             config_dict: dict = {
                 "response_modalities": ["AUDIO"],
                 "output_audio_transcription": {},
@@ -162,10 +202,10 @@ class LiveSessionManager:
                 self._resumption_handle = None
                 self._session_cm = None
                 self._session = None
-                # 1007(잘못된 인자) 등 실패 시 재시도 1회(세션 재개 없이)
+                # 재시도 1회 (세션 재개 없이)
                 try:
                     await asyncio.sleep(0.5)
-                    config_retry = config_dict
+                    config_retry = {k: v for k, v in config_dict.items() if k != "session_resumption"}
                     self._session_cm = client.aio.live.connect(model=LIVE_MODEL, config=config_retry)
                     self._session = await self._session_cm.__aenter__()
                     self._receive_task = asyncio.create_task(self._receive_loop())
@@ -192,7 +232,7 @@ class LiveSessionManager:
             self._session = None
 
     async def transcribe(self, audio_bytes: bytes) -> str:
-        """Send audio to Live session and wait for one transcript. Uses lock so only one send at a time."""
+        """Send audio to Live session and wait for turn_complete transcript."""
         if not audio_bytes or len(audio_bytes) < MIN_AUDIO_BYTES:
             return ""
         if self._session is None:
@@ -212,13 +252,13 @@ class LiveSessionManager:
             return ""
         logger.info("Live API 오디오 전송 중 (%d bytes)...", len(audio_bytes))
         try:
-            # send_realtime_input: 한 번에 하나의 인자만 허용. 오디오 → 스트림 끝 순서로 별도 호출.
+            # send_realtime_input: 한 번에 하나의 인자만 허용
             await session.send_realtime_input(audio=blob)
             try:
                 await session.send_realtime_input(audio_stream_end=True)
             except (TypeError, ValueError):
-                pass  # audio_stream_end 단독 호출 미지원 시 무시
-            logger.info("Live API 전송 완료, 전사 대기 중...")
+                pass  # audio_stream_end 미지원 SDK
+            logger.info("Live API 전송 완료, turn_complete 대기 중...")
         except AttributeError:
             try:
                 await session.send(input=blob, end_of_turn=True)
@@ -238,10 +278,10 @@ class LiveSessionManager:
             return ""
         try:
             text = await asyncio.wait_for(self._transcript_queue.get(), timeout=30.0)
-            logger.info("Live API 전사 수신 완료")
+            logger.info("전사 결과: %s", text[:80] + "..." if len(text) > 80 else text)
             return text
         except asyncio.TimeoutError:
-            self._on_error("Live 전사 응답 시간 초과")
+            self._on_error("Live 전사 응답 시간 초과 (turn_complete 미수신)")
             return ""
         except Exception as e:
             self._on_error(f"Live 전사 수신 실패: {e}")
