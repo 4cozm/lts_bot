@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import signal
 import sys
 from enum import Enum
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 # 프로젝트 루트(backend 상위)의 .env 로드
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -38,8 +46,9 @@ class VoiceAssistantApp:
         self.llm = LLMAgent()
         try:
             self.windows = WindowManager()
-        except Exception:
+        except Exception as exc:
             self.windows = None
+            logger.exception("창 제어 기능 비활성화: %s", exc)
             play_sound("error.mp3")
         self.ws_bridge = WebSocketBridge()
 
@@ -48,6 +57,7 @@ class VoiceAssistantApp:
         self._running = True
 
     def _on_audio_error(self, text: str) -> None:
+        logger.error("오디오/Live 오류: %s", text)
         play_sound("error.mp3")
 
     async def _run_loop(self) -> None:
@@ -82,7 +92,8 @@ class VoiceAssistantApp:
                 # 게이트 통과한 발화는 모두 명령으로 처리 (OK 홍걸 웨이크 게이트 없음)
                 action = self.llm.plan_action(result.text)
                 await self._execute_action(action)
-            except Exception:
+            except Exception as exc:
+                logger.exception("런루프 예외: %s", exc)
                 play_sound("error.mp3")
 
         self.audio.stop()
