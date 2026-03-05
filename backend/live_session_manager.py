@@ -24,6 +24,29 @@ MIN_AUDIO_BYTES = 3200
 CHUNK_BYTES = 640
 
 
+def _msg_summary(msg) -> str:
+    """수신 메시지 전체 요약: 모든 비공개 아닌 필드명과 타입/요약값 (activity_end, usage_metadata 등 포함)."""
+    if msg is None:
+        return "None"
+    parts = []
+    for k in dir(msg):
+        if k.startswith("_"):
+            continue
+        try:
+            v = getattr(msg, k, None)
+            if callable(v):
+                continue
+            if isinstance(v, (bytes, bytearray)):
+                parts.append(f"{k}=<bytes len={len(v)}>")
+            elif isinstance(v, str) and len(v) > 100:
+                parts.append(f"{k}={repr(v[:100])}...")
+            else:
+                parts.append(f"{k}={repr(v)[:120]}")
+        except Exception as e:
+            parts.append(f"{k}=<err:{e}>")
+    return " | ".join(parts[:25])
+
+
 def _raw_dump(obj, max_len: int = 500) -> str:
     """디버깅용: 객체를 로그 가능한 문자열로 (바이너리/과도한 길이 제한)."""
     if obj is None:
@@ -141,16 +164,42 @@ class LiveSessionManager:
                 if self._closed:
                     break
                 _msg_count += 1
-                # RAW: 수신된 메시지 항상 로그 (타입 + 구조 요약)
+                # RAW: 수신된 메시지 전체 로깅 — transcript 외 activity_end, usage_metadata, AUDIO 등 누락 방지
+                attrs = [x for x in dir(msg) if not x.startswith("_")]
                 logger.info(
-                    "[Live RAW] msg #%d 수신 | type=%s | dir=%s",
+                    "[Live RAW] msg #%d 수신 | type=%s | attrs=%s",
                     _msg_count,
                     type(msg).__name__,
-                    [x for x in dir(msg) if not x.startswith("_")],
+                    attrs,
                 )
+                logger.info("[Live RAW] msg 전체 필드 요약: %s", _msg_summary(msg))
                 logger.info("[Live RAW] msg dump: %s", _raw_dump(msg))
+                if hasattr(msg, "model_dump"):
+                    try:
+                        wire = msg.model_dump(mode="json")
+                        # 바이너리/긴 값은 길이만
+                        def _wire_summary(d, depth=0):
+                            if depth > 2:
+                                return "..."
+                            if isinstance(d, dict):
+                                return {k: _wire_summary(v, depth + 1) for k, v in list(d.items())[:12]}
+                            if isinstance(d, (bytes, bytearray)):
+                                return f"<bytes len={len(d)}>"
+                            if isinstance(d, str) and len(d) > 80:
+                                return d[:80] + "..."
+                            return d
+                        logger.info("[Live RAW] msg.model_dump (와이어 포맷 키): %s", list(wire.keys()) if isinstance(wire, dict) else type(wire).__name__)
+                        logger.info("[Live RAW] msg.model_dump 요약: %s", _raw_dump(_wire_summary(wire)))
+                    except Exception as e:
+                        logger.info("[Live RAW] msg.model_dump 실패: %s", e)
 
-                sc = getattr(msg, "server_content", None)
+                # 문서상 서버 메시지 타입: ServerContent, ToolCall, ActivityEnd, GoAway, usageMetadata 등
+                for wire_name in ("activity_end", "activityEnd", "usage_metadata", "usageMetadata", "go_away", "goAway"):
+                    v = getattr(msg, wire_name, None)
+                    if v is not None:
+                        logger.info("[Live RAW] msg.%s = %s", wire_name, _raw_dump(v))
+
+                sc = getattr(msg, "server_content", None) or getattr(msg, "serverContent", None)
                 if sc is not None:
                     logger.info(
                         "[Live RAW] server_content 있음 | sc.type=%s | sc.dump: %s",
@@ -162,6 +211,16 @@ class LiveSessionManager:
                         getattr(sc, "turn_complete", "<없음>"),
                         getattr(sc, "turnComplete", "<없음>"),
                     )
+                    # AUDIO/바이너리 파트: parts, inline_data 등
+                    for part_attr in ("parts", "model_turn", "modelTurn"):
+                        p = getattr(sc, part_attr, None)
+                        if p is None:
+                            continue
+                        if hasattr(p, "__iter__") and not isinstance(p, (str, bytes)):
+                            for i, part in enumerate(list(p)[:5]):
+                                pd = _raw_dump(part)
+                                if "bytes" in pd or "data" in pd:
+                                    logger.info("[Live RAW] server_content.%s[%d] (바이너리/파트): %s", part_attr, i, pd)
 
                 # ── Session resumption ──────────────────────────────────────
                 su = getattr(msg, "session_resumption_update", None)
@@ -350,6 +409,18 @@ class LiveSessionManager:
                 logger.info("[Live RAW] audio_stream_end 전송 완료 (총 경과 %.3fs)", stream_end_at)
             except (TypeError, ValueError) as e:
                 logger.info("[Live RAW] audio_stream_end 미지원 또는 오류 (무시): %s", e)
+
+            # (1) 턴 종료 트리거: RealtimeInput만으로는 서버가 턴 완료로 인식하지 않을 수 있음.
+            #     clientContent.turnComplete 명시 전송으로 응답/전사 생성 시작 유도.
+            try:
+                if hasattr(session, "send_client_content"):
+                    await session.send_client_content(turn_complete=True)
+                    logger.info("[Live RAW] send_client_content(turn_complete=True) 전송 완료 (총 경과 %.3fs)", _time.perf_counter() - send_start)
+                else:
+                    logger.info("[Live RAW] send_client_content 없음 (턴 종료 명시 불가)")
+            except (TypeError, ValueError, AttributeError) as e:
+                logger.info("[Live RAW] send_client_content(turn_complete=True) 실패(무시): %s", e)
+
             logger.info("[Live RAW] 전송 끝. transcript_queue.get() 대기 (timeout=30s)...")
         except AttributeError as e:
             logger.info("[Live RAW] send_realtime_input 없음, send() 폴백 (한 번에 전송): %s", e)
