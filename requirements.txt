@@ -1,10 +1,12 @@
 # LTS Bot backend
+wheel>=0.38.0   # MeloTTS 등 빌드 시 필요
 websockets>=12.0
 google-generativeai>=0.8.0
 pyaudio>=0.2.14
 sounddevice>=0.4.6
 soundfile>=0.12.1
 google-genai>=1.0.0
+melotts>=0.1.0
 
 # Optional per-platform
 # pywin32  # Windows only
