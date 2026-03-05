@@ -112,8 +112,9 @@ class LiveSessionManager:
                 # ── 전사 텍스트 수집 ────────────────────────────────────────
                 sc = getattr(msg, "server_content", None)
                 if sc:
-                    # input_audio_transcription: 사용자가 말한 내용 전사 (STT 핵심)
-                    for attr in ("input_audio_transcription", "inputAudioTranscription"):
+                    # input_audio_transcription / input_transcription: 사용자 음성 전사 (STT 핵심)
+                    # 문서: https://ai.google.dev/gemini-api/docs/live
+                    for attr in ("input_audio_transcription", "inputAudioTranscription", "input_transcription"):
                         t = _extract_text(getattr(sc, attr, None))
                         if t:
                             logger.debug("input_audio_transcription: %s", t)
@@ -139,8 +140,8 @@ class LiveSessionManager:
                                     logger.debug("model_turn.part.text: %s", t)
                                     turn_texts.append(t)
 
-                    # turn_complete → 큐에 넣기 (텍스트 없어도 빈 문자열로 신호)
-                    if getattr(sc, "turn_complete", False):
+                    # turn_complete / turnComplete → 큐에 넣기 (텍스트 없어도 빈 문자열로 신호)
+                    if getattr(sc, "turn_complete", False) or getattr(sc, "turnComplete", False):
                         _flush_turn()
                         continue
 
