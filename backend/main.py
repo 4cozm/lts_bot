@@ -77,8 +77,13 @@ class VoiceAssistantApp:
                 short_res = result[:80].replace('\n', ' ') + ("..." if len(result) > 80 else "")
                 logger.info("AI(텍스트/생각 요약): %s", short_res)
             except Exception as exc:
-                logger.exception("런루프 예외: %s", exc)
-                play_sound("error.wav")
+                err_str = str(exc).lower()
+                # 제미나이 연결 종료(타임아웃, 소켓 닫힘)로 인한 예외는 오류 사운드 미재생
+                if "closed" in err_str or "timeout" in err_str or "disconnect" in err_str or "connection" in err_str or "goaway" in err_str:
+                    logger.warning("AI 세션 연결 종료 또는 타임아웃 (사운드 생략): %s", exc)
+                else:
+                    logger.exception("런루프 예외: %s", exc)
+                    play_sound("error.wav")
 
         self.audio.stop()
         await self.live_session.close()
