@@ -1,4 +1,7 @@
-function getVideo() {
+if (!window._ltsContentScriptLoaded) {
+  window._ltsContentScriptLoaded = true;
+
+  function getVideo() {
   return document.querySelector('video');
 }
 
@@ -34,14 +37,24 @@ async function runAction(message) {
   const video = await waitVideo();
   if (!video) return;
 
-  if (action === 'play') {
-    await video.play().catch(() => {});
-  } else if (action === 'pause') {
-    video.pause();
-  } else if (action === 'seek') {
-    const sec = Number(message.seconds || 0);
-    video.currentTime = Math.max(0, video.currentTime + sec);
-  }
+    if (action === 'play') {
+      const playBtn = document.querySelector('.ytp-play-button');
+      if (playBtn && video.paused) {
+        playBtn.click();
+      } else {
+        await video.play().catch(() => {});
+      }
+    } else if (action === 'pause') {
+      const playBtn = document.querySelector('.ytp-play-button');
+      if (playBtn && !video.paused) {
+        playBtn.click();
+      } else {
+        video.pause();
+      }
+    } else if (action === 'seek') {
+      const sec = Number(message.seconds || 0);
+      video.currentTime = Math.max(0, video.currentTime + sec);
+    }
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -72,6 +85,7 @@ function checkAutoPlay() {
   }
 }
 
-window.addEventListener('load', checkAutoPlay);
-// In case of SPA transitions without full reload
-window.addEventListener('yt-navigate-finish', checkAutoPlay);
+  window.addEventListener('load', checkAutoPlay);
+  // In case of SPA transitions without full reload
+  window.addEventListener('yt-navigate-finish', checkAutoPlay);
+}

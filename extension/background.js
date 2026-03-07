@@ -76,7 +76,19 @@ async function sendMessageSafe(tabId, payload) {
   try {
     await chrome.tabs.sendMessage(tabId, payload);
   } catch (e) {
-    console.warn('content message failed', tabId, e);
+    console.warn('content message failed, attempting to inject content script...', tabId, e);
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content.js']
+      });
+      // Allow a brief moment for the script to initialize
+      await new Promise(r => setTimeout(r, 100));
+      await chrome.tabs.sendMessage(tabId, payload);
+      console.log('Successfully injected and delivered message to:', tabId);
+    } catch (err) {
+      console.warn('Failed to inject script and send message:', tabId, err);
+    }
   }
 }
 
