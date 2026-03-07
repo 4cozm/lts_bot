@@ -16,7 +16,7 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 # Model and config (Live API native audio model)
-LIVE_MODEL = "gemini-2.0-flash"
+LIVE_MODEL = "gemini-2.0-flash-exp"
 AUDIO_PCM_MIME = "audio/pcm;rate=16000"
 # 16 kHz, 16-bit mono: 32000 bytes/sec. 최소 100ms 미만은 non-audio 오류 유발 가능.
 MIN_AUDIO_BYTES = 3200

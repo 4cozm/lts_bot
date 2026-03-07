@@ -26,6 +26,18 @@ from live_session_manager import LiveSessionManager
 logger = logging.getLogger(__name__)
 
 
+def _frame_rms(frame: bytes) -> float:
+    """RMS of 16-bit little-endian PCM mono."""
+    n = len(frame) // 2
+    if n == 0:
+        return 0.0
+    total = 0.0
+    for i in range(n):
+        sample = int.from_bytes(frame[i * 2 : i * 2 + 2], "little", signed=True)
+        total += sample * sample
+    import math
+    return math.sqrt(total / n)
+
 
 class AudioHandler:
     """Microphone streaming + level/length gate + Gemini Live STT.
@@ -169,10 +181,12 @@ class AudioHandler:
             except Exception as e:
                 is_speech = False
 
-            if is_speech:
+            rms = _frame_rms(frame)
+            # 목소리의 파장(VAD)이 감지되고, 동시에 설정한 음량 기준을 넘어야 목소리로 판단
+            if is_speech and rms >= self.gate_threshold:
                 if len(voiced_frames) == 0:
-                    logger.info("게이트 임계 통과 (WebRTC VAD 감지)")
-                    sys.stdout.write("\n[마이크] 🎤 목소리 감지됨: ")
+                    logger.info("게이트 임계 통과 (WebRTC VAD & RMS=%.0f)", rms)
+                    sys.stdout.write(f"\n[마이크] 🎤 목소리 감지됨 (음량 {rms:.0f}): ")
                     sys.stdout.flush()
                     _debug_printed_frames = 0
                 
