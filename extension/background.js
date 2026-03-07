@@ -78,9 +78,15 @@ async function sendMessageSafe(tabId, payload) {
 
 async function handleCommand(cmd) {
   const tabs = await getYoutubeTabs();
-  if (!tabs.length) return;
-
   const action = cmd.action;
+
+  if (!tabs.length) {
+    if (action === 'search_and_play' && cmd.query) {
+      const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(cmd.query)}&lts_play=1`;
+      chrome.tabs.create({ url });
+    }
+    return;
+  }
 
   if (action === 'search_and_play') {
     await Promise.all(tabs.map((t) => sendMessageSafe(t.id, { action: 'pause' })));

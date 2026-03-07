@@ -98,6 +98,11 @@ class VoiceAssistantApp:
             return
 
         if name == "youtube_control":
+            if not getattr(self.ws_bridge, "clients", None):
+                logger.error("오류: 유튜브 익스텐션과 연결되지 않았습니다!")
+                play_sound("error.wav")
+                return
+
             payload = {
                 "action": args.get("action", "play"),
                 "query": args.get("query"),
