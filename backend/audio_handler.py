@@ -15,6 +15,7 @@ import math
 import os
 import queue
 import re
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -134,6 +135,9 @@ class AudioHandler:
         frame_duration_sec = self.frame_ms / 1000.0
         voiced_duration_sec = 0.0
 
+        # 시각적 디버그용 변수
+        _debug_printed_frames = 0
+
         while self._running:
             if self.is_output_locked():
                 voiced_frames.clear()
@@ -168,19 +172,39 @@ class AudioHandler:
             if is_speech:
                 if len(voiced_frames) == 0:
                     logger.info("게이트 임계 통과 (WebRTC VAD 감지)")
+                    sys.stdout.write("\n[마이크] 🎤 목소리 감지됨: ")
+                    sys.stdout.flush()
+                    _debug_printed_frames = 0
+                
                 voiced_frames.append(frame)
                 silence_sec = 0.0
                 voiced_duration_sec += frame_duration_sec
+                
+                # 0.15초마다 점 하나씩 찍어서 말하고 있음을 시각적으로 표시
+                _debug_printed_frames += 1
+                if _debug_printed_frames % 5 == 0:
+                    sys.stdout.write("🟢")
+                    sys.stdout.flush()
+                    
                 if voiced_duration_sec >= self.gate_min_duration_sec:
                     utterance_started = True
                 continue
 
             if voiced_frames:
                 silence_sec += frame_duration_sec
+                # 무음 구간 시각적 표시
+                _debug_printed_frames += 1
+                if _debug_printed_frames % 5 == 0:
+                    sys.stdout.write("➖")
+                    sys.stdout.flush()
+
                 if silence_sec >= self.silence_threshold:
                     if utterance_started:
                         audio_bytes = b"".join(voiced_frames)
                         dur_sec = len(audio_bytes) / (self.sample_rate * 2)
+                        
+                        sys.stdout.write(f" 묶음 완료! ({dur_sec:.2f}초)\n")
+                        sys.stdout.flush()
                         queue_depth = self._audio_queue.qsize()
                         logger.info(
                             "오디오 수집완료 (%.2fs, %d bytes) 큐깊이=%d, copy 재생 후 STT 전송",
@@ -209,6 +233,8 @@ class AudioHandler:
                             return None
                         return text.strip()
                     else:
+                        sys.stdout.write(" ❌ (너무 짧아서 소음으로 버림)\n")
+                        sys.stdout.flush()
                         voiced_frames.clear()
                         silence_sec = 0.0
                         voiced_duration_sec = 0.0
