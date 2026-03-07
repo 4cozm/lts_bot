@@ -215,7 +215,7 @@ class LiveSessionManager:
         def _on_turn_complete():
             result = " ".join(turn_texts).strip()
             turn_texts.clear()
-            logger.info("[Live RAW] turn_complete → 턴 종료 (로그만, 큐는 스트리밍으로 이미 반영): %s", result[:80] if result else "(없음)")
+            logger.debug("[Live RAW] turn_complete → 턴 종료 (로그만, 큐는 스트리밍으로 이미 반영): %s", result[:80] if result else "(없음)")
 
         logger.info("[Live RAW] receive_loop 시작 (턴 끝나면 receive() 재호출)...")
         try:
@@ -223,43 +223,47 @@ class LiveSessionManager:
                 async for msg in session.receive():
                     if self._closed:
                         break
-                        _msg_count += 1
-                        # 배포/정상 작동 시에는 콘솔을 너무 차지하지 않도록 DEBUG로 전환
-                        attrs = [x for x in dir(msg) if not x.startswith("_")]
-                        logger.debug(
-                        "[Live RAW] msg #%d 수신 | type=%s | attrs=%s",
-                        _msg_count,
-                        type(msg).__name__,
-                        attrs,
-                        )
-                        logger.debug("[Live RAW] msg 전체 필드 요약: %s", _msg_summary(msg))
-                        logger.debug("[Live RAW] msg dump: %s", _raw_dump(msg))
-                        if hasattr(msg, "model_dump"):
-                            try:
-                                wire = msg.model_dump(mode="json")
-                                # 바이너리/긴 값은 길이만
-                                def _wire_summary(d, depth=0):
-                                    if depth > 2:
-                                        return "..."
-                                    if isinstance(d, dict):
-                                        return {k: _wire_summary(v, depth + 1) for k, v in list(d.items())[:12]}
-                                    if isinstance(d, (bytes, bytearray)):
-                                        return f"<bytes len={len(d)}>"
-                                    if isinstance(d, str) and len(d) > 80:
-                                        return d[:80] + "..."
-                                    return d
-                                logger.debug("[Live RAW] msg.model_dump (와이어 포맷 키): %s", list(wire.keys()) if isinstance(wire, dict) else type(wire).__name__)
-                                logger.debug("[Live RAW] msg.model_dump 요약: %s", _raw_dump(_wire_summary(wire)))
-                            except Exception as e:
-                                logger.debug("[Live RAW] msg.model_dump 실패: %s", e)
+                    _msg_count += 1
+                    # 배포/정상 작동 시에는 콘솔을 너무 차지하지 않도록 DEBUG로 전환
+                    attrs = [x for x in dir(msg) if not x.startswith("_")]
+                    logger.debug(
+                    "[Live RAW] msg #%d 수신 | type=%s | attrs=%s",
+                    _msg_count,
+                    type(msg).__name__,
+                    attrs,
+                    )
+                    logger.debug("[Live RAW] msg 전체 필드 요약: %s", _msg_summary(msg))
+                    logger.debug("[Live RAW] msg dump: %s", _raw_dump(msg))
+                    if hasattr(msg, "model_dump"):
+                        try:
+                            wire = msg.model_dump(mode="json")
+                            # 바이너리/긴 값은 길이만
+                            def _wire_summary(d, depth=0):
+                                if depth > 2:
+                                    return "..."
+                                if isinstance(d, dict):
+                                    return {k: _wire_summary(v, depth + 1) for k, v in list(d.items())[:12]}
+                                if isinstance(d, (bytes, bytearray)):
+                                    return f"<bytes len={len(d)}>"
+                                if isinstance(d, str) and len(d) > 80:
+                                    return d[:80] + "..."
+                                return d
+                            logger.debug("[Live RAW] msg.model_dump (와이어 포맷 키): %s", list(wire.keys()) if isinstance(wire, dict) else type(wire).__name__)
+                            logger.debug("[Live RAW] msg.model_dump 요약: %s", _raw_dump(_wire_summary(wire)))
+                        except Exception as e:
+                            logger.debug("[Live RAW] msg.model_dump 실패: %s", e)
 
                     # 문서상 서버 메시지 타입: ServerContent, ToolCall, ActivityEnd, GoAway, usageMetadata 등
                     for wire_name in ("activity_end", "activityEnd", "usage_metadata", "usageMetadata", "go_away", "goAway"):
                         v = getattr(msg, wire_name, None)
                         if v is not None:
-                            logger.info("[Live RAW] msg.%s = %s", wire_name, _raw_dump(v))
+                            logger.debug("[Live RAW] msg.%s = %s", wire_name, _raw_dump(v))
 
                     sc = getattr(msg, "server_content", None) or getattr(msg, "serverContent", None)
+                    su = getattr(msg, "session_resumption_update", None)
+                    md = getattr(msg, "usage_metadata", None) or getattr(msg, "usageMetadata", None)
+                    if md:
+                        logger.debug("[Live RAW] msg.usage_metadata = %s", _raw_dump(md))
                     if sc is not None:
                         logger.debug(
                             "[Live RAW] server_content 있음 | sc.type=%s",
@@ -295,7 +299,7 @@ class LiveSessionManager:
                     # 최상위 tool_call 확인 (google-genai SDK 0.5+)
                     tc = getattr(msg, "tool_call", None)
                     if tc:
-                        logger.info("[Live RAW] msg.tool_call 수신")
+                        logger.debug("[Live RAW] msg.tool_call 수신")
                         import json
                         try:
                             # wire data에서 function_calls 추출
@@ -339,7 +343,7 @@ class LiveSessionManager:
                         # turn_complete 시 턴 종료
                         turn_done = getattr(sc, "turn_complete", False) or getattr(sc, "turnComplete", False)
                         if turn_done:
-                            logger.info("[Live RAW] turn_complete=True 감지 → 턴 종료")
+                            logger.debug("[Live RAW] turn_complete=True 감지 → 턴 종료")
                             _on_turn_complete()
                             continue
 
@@ -468,7 +472,7 @@ class LiveSessionManager:
         import time as _time
         send_start = _time.perf_counter()
         total_bytes = len(audio_bytes)
-        logger.info("[Live RAW] 오디오 전송 시작: %d bytes (%.2fs), mime=%s", total_bytes, total_bytes / 32000.0, AUDIO_PCM_MIME)
+        logger.debug("[Live RAW] 오디오 전송 시작: %d bytes (%.2fs), mime=%s", total_bytes, total_bytes / 32000.0, AUDIO_PCM_MIME)
 
         try:
             # 턴 경계: activity_start → 오디오 → activity_end (서버 VAD 끄고 클라이언트가 경계 명시)
@@ -532,7 +536,7 @@ class LiveSessionManager:
             # 턴 종료: activity_end (스트림 끝을 서버에 명시)
             await _send_activity_end()
 
-            logger.info("[Live RAW] 전송 끝. 전사 스트리밍 대기 (최장 10s idle)...")
+            logger.debug("[Live RAW] 전송 끝. 전사 스트리밍 대기 (최장 10s idle)...")
         except AttributeError as e:
             logger.info("[Live RAW] send_realtime_input 없음, send() 폴백 (한 번에 전송): %s", e)
             try:
@@ -565,8 +569,11 @@ class LiveSessionManager:
                     deadline = _time.perf_counter() + idle_sec
                 except asyncio.QueueEmpty:
                     await asyncio.sleep(0.05)
-            logger.info("[Live RAW] 전사 확정 (0.8s idle): len=%d", len(last_text))
-            logger.info("전사 결과: %s", last_text[:80] + "..." if len(last_text) > 80 else last_text)
+            logger.debug("[Live RAW] 전사 확정 (0.8s idle): len=%d", len(last_text))
+            
+            # 긴 텍스트는 콘솔에서 짧게 축약해서 보여줍니다.
+            short_str = last_text[:60].replace('\n', ' ') + "..." if len(last_text) > 60 else last_text.replace('\n', ' ')
+            logger.debug("전사 결과 수신: %s", short_str)
             return last_text
         except asyncio.TimeoutError:
             logger.warning("[Live RAW] 첫 전사 이벤트 30s 타임아웃")

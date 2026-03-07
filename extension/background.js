@@ -61,6 +61,10 @@ function startPeriodicReconnect() {
     if (!isConnected()) {
       connectWebSocket();
     }
+    // Manifest V3 Service Worker가 30초 후 유휴 상태로 전환되어 WebSocket이 끊기는 것을 방지
+    if (chrome.runtime?.getPlatformInfo) {
+      chrome.runtime.getPlatformInfo();
+    }
   }, PERIODIC_CHECK_MS);
 }
 

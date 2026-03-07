@@ -74,7 +74,8 @@ class VoiceAssistantApp:
                 except json.JSONDecodeError:
                     pass
 
-                logger.info("AI(일반 응답): %s", result)
+                short_res = result[:80].replace('\n', ' ') + ("..." if len(result) > 80 else "")
+                logger.info("AI(텍스트/생각 요약): %s", short_res)
             except Exception as exc:
                 logger.exception("런루프 예외: %s", exc)
                 play_sound("error.wav")
