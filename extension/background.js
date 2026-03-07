@@ -112,7 +112,7 @@ async function handleCommand(cmd) {
     return;
   }
 
-  if (action === 'pause' || action === 'play') {
+  if (action === 'pause' || action === 'play' || action === 'volume_up' || action === 'volume_down') {
     await Promise.all(tabs.map((t) => sendMessageSafe(t.id, { action })));
     return;
   }

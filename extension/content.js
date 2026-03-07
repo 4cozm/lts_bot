@@ -19,9 +19,14 @@ async function runAction(message) {
   const action = message.action;
 
   if (action === 'search_and_play') {
-    const q = encodeURIComponent(message.query || '');
+    const queryStr = message.query || '';
+    const q = encodeURIComponent(queryStr);
     const url = `https://www.youtube.com/results?search_query=${q}&lts_play=1`;
-    if (!location.href.includes(`search_query=${q}`)) {
+    
+    const currentUrl = new URL(location.href);
+    const currentQuery = currentUrl.searchParams.get('search_query') || '';
+    
+    if (currentQuery !== queryStr) {
       location.href = url;
       return;
     }
@@ -54,6 +59,10 @@ async function runAction(message) {
     } else if (action === 'seek') {
       const sec = Number(message.seconds || 0);
       video.currentTime = Math.max(0, video.currentTime + sec);
+    } else if (action === 'volume_up') {
+      video.volume = Math.min(1.0, video.volume + 0.1);
+    } else if (action === 'volume_down') {
+      video.volume = Math.max(0.0, video.volume - 0.1);
     }
 }
 

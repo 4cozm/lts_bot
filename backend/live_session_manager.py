@@ -43,7 +43,7 @@ LIVE_TOOLS = [
                     "properties": {
                         "action": {
                             "type": "STRING",
-                            "enum": ["search_and_play", "pause", "play", "seek"]
+                            "enum": ["search_and_play", "pause", "play", "seek", "volume_up", "volume_down"]
                         },
                         "query": {"type": "STRING", "description": "검색어(search_and_play일 때)"},
                         "seconds": {"type": "NUMBER", "description": "이동할 초(seek일 때)"},
@@ -73,7 +73,8 @@ SYSTEM_INSTRUCTION_PARTS = [
     "오디오 생성 및 텍스트 출력을 최소화하고, 도구(Tool Call)만 사용하여 즉각적으로 실행하세요.",
     "만약 사용자가 제목이나 분위기를 특정하여 재생을 요구하면 'youtube_control' 도구의 'search_and_play' 액션을 호출하세요.",
     "만약 특정 검색어 없이 단순히 '노래 틀어줘', '음악 재생해'라고만 하면 기존 유튜브 탭을 재생하라는 의미이므로 'play' 액션을 호출하세요.",
-    "만약 '음악 꺼줘', '멈춰'라고 하면 'pause' 액션을 호출하세요."
+    "만약 '음악 꺼줘', '멈춰'라고 하면 'pause' 액션을 호출하세요.",
+    "만약 '소리 키워줘', '볼륨 올려'라고 하면 'volume_up' 액션을, '소리 줄여줘', '볼륨 낮춰'라고 하면 'volume_down' 액션을 호출하세요."
 ]
 SYSTEM_INSTRUCTION = {
     "parts": [{"text": " ".join(SYSTEM_INSTRUCTION_PARTS)}]
