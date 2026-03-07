@@ -67,10 +67,13 @@ LIVE_TOOLS = [
     }
 ]
 
+SYSTEM_INSTRUCTION_PARTS = [
+    "당신은 사용자의 음성 명령을 받아 관련 도구를 호출하는 AI 비서입니다.",
+    "중요: 절대로 구두 형태나 음성으로 긴 답변을 하지 마세요. 오디오 출력을 최소화하세요.",
+    "대신, 항상 요청된 작업을 도구(Tool Call)로 즉시 실행하거나 필요시 아주 짧은 텍스트(Text)로만 대답해야 합니다."
+]
 SYSTEM_INSTRUCTION = {
-    "parts": [
-        {"text": "당신은 사용자의 음성 명령을 받아 관련 도구를 호출하는 AI 비서입니다. 대답 대신 반드시 적합한 도구를 호출해야 합니다. 불필요한 텍스트 대답을 자제하세요."}
-    ]
+    "parts": [{"text": " ".join(SYSTEM_INSTRUCTION_PARTS)}]
 }
 
 
@@ -380,8 +383,9 @@ class LiveSessionManager:
             client = self._get_client()
             # 모델 응답(tool calls 및 텍스트) 수신 필요
             # input_audio_transcription을 제거하여 굳이 STT를 안 받도록 하거나 켜둡니다 (여기선 도구 호출 위주)
+            # Native Audio 모델은 오디오 입력을 받을 때 무조건 response_modalities에 AUDIO가 포함되어야 함 (1007 Error 방지)
             config_dict: dict = {
-                "response_modalities": ["TEXT"],
+                "response_modalities": ["AUDIO"],
                 "tools": LIVE_TOOLS,
                 "system_instruction": SYSTEM_INSTRUCTION,
                 "realtime_input_config": {
