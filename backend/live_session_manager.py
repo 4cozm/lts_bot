@@ -69,9 +69,9 @@ LIVE_TOOLS = [
 
 SYSTEM_INSTRUCTION_PARTS = [
     "당신은 사용자의 음성 명령을 받아 관련 도구를 호출하는 AI 비서입니다.",
-    "중요: 절대로 구두 형태나 음성으로 긴 답변을 하지 마세요. 오디오 출력을 최소화하세요.",
-    "대신, 항상 요청된 작업을 도구(Tool Call)로 즉시 실행하거나 필요시 아주 짧은 텍스트(Text)로만 대답해야 합니다.",
-    "만약 사용자가 영상, 음악, 노래 재생을 요구하거나 유튜브 관련된 조작을 요구한다면 반드시 'youtube_control' 도구를 사용해야 합니다."
+    "중요: 어떤 경우에도 구두, 음성, 또는 텍스트로 되묻지 마세요. 확인 질문(예: '어떤 노래를 틀어드릴까요?')은 절대 금지됩니다.",
+    "오디오 생성 및 텍스트 출력을 최소화하고, 도구(Tool Call)만 사용하여 즉각적으로 실행하세요.",
+    "만약 사용자가 영상이나 노래 재생을 요구했지만 특정 제목을 말하지 않았다면(예: '유튜브 노래 틀어줘'), 절대 되묻지 말고 임의의 검색어(예: '인기 노래 플레이리스트')를 query로 삼아 즉시 'youtube_control' 도구(action: search_and_play)를 호출해야 합니다."
 ]
 SYSTEM_INSTRUCTION = {
     "parts": [{"text": " ".join(SYSTEM_INSTRUCTION_PARTS)}]
@@ -222,16 +222,16 @@ class LiveSessionManager:
                     if self._closed:
                         break
                         _msg_count += 1
-                        # RAW: 수신된 메시지 전체 로깅 — transcript 외 activity_end, usage_metadata, AUDIO 등 누락 방지
+                        # 배포/정상 작동 시에는 콘솔을 너무 차지하지 않도록 DEBUG로 전환
                         attrs = [x for x in dir(msg) if not x.startswith("_")]
-                        logger.info(
+                        logger.debug(
                         "[Live RAW] msg #%d 수신 | type=%s | attrs=%s",
                         _msg_count,
                         type(msg).__name__,
                         attrs,
                         )
-                        logger.info("[Live RAW] msg 전체 필드 요약: %s", _msg_summary(msg))
-                        logger.info("[Live RAW] msg dump: %s", _raw_dump(msg))
+                        logger.debug("[Live RAW] msg 전체 필드 요약: %s", _msg_summary(msg))
+                        logger.debug("[Live RAW] msg dump: %s", _raw_dump(msg))
                         if hasattr(msg, "model_dump"):
                             try:
                                 wire = msg.model_dump(mode="json")
@@ -246,10 +246,10 @@ class LiveSessionManager:
                                     if isinstance(d, str) and len(d) > 80:
                                         return d[:80] + "..."
                                     return d
-                                logger.info("[Live RAW] msg.model_dump (와이어 포맷 키): %s", list(wire.keys()) if isinstance(wire, dict) else type(wire).__name__)
-                                logger.info("[Live RAW] msg.model_dump 요약: %s", _raw_dump(_wire_summary(wire)))
+                                logger.debug("[Live RAW] msg.model_dump (와이어 포맷 키): %s", list(wire.keys()) if isinstance(wire, dict) else type(wire).__name__)
+                                logger.debug("[Live RAW] msg.model_dump 요약: %s", _raw_dump(_wire_summary(wire)))
                             except Exception as e:
-                                logger.info("[Live RAW] msg.model_dump 실패: %s", e)
+                                logger.debug("[Live RAW] msg.model_dump 실패: %s", e)
 
                     # 문서상 서버 메시지 타입: ServerContent, ToolCall, ActivityEnd, GoAway, usageMetadata 등
                     for wire_name in ("activity_end", "activityEnd", "usage_metadata", "usageMetadata", "go_away", "goAway"):
@@ -259,15 +259,13 @@ class LiveSessionManager:
 
                     sc = getattr(msg, "server_content", None) or getattr(msg, "serverContent", None)
                     if sc is not None:
-                        logger.info(
-                            "[Live RAW] server_content 있음 | sc.type=%s | sc.dump: %s",
-                            type(sc).__name__,
-                            _raw_dump(sc),
+                        logger.debug(
+                            "[Live RAW] server_content 있음 | sc.type=%s",
+                            type(sc).__name__
                         )
-                        logger.info(
-                            "[Live RAW] server_content turn_complete=%s, turnComplete=%s",
-                            getattr(sc, "turn_complete", "<없음>"),
-                            getattr(sc, "turnComplete", "<없음>"),
+                        logger.debug(
+                            "[Live RAW] server_content turn_complete=%s",
+                            getattr(sc, "turn_complete", "<없음>")
                         )
                         # AUDIO/바이너리 파트: parts, inline_data 등
                         for part_attr in ("parts", "model_turn", "modelTurn"):
@@ -278,7 +276,7 @@ class LiveSessionManager:
                                 for i, part in enumerate(list(p)[:5]):
                                     pd = _raw_dump(part)
                                     if "bytes" in pd or "data" in pd:
-                                        logger.info("[Live RAW] server_content.%s[%d] (바이너리/파트): %s", part_attr, i, pd)
+                                        logger.debug("[Live RAW] server_content.%s[%d] (바이너리/파트): ...", part_attr, i)
 
                     # ── Session resumption ──────────────────────────────────────
                     su = getattr(msg, "session_resumption_update", None)
@@ -482,7 +480,7 @@ class LiveSessionManager:
                         await send_fn(activity_start=ActivityStart())
                     except (ImportError, AttributeError, TypeError):
                         await send_fn(activity_start=True)
-                    logger.info("[Live RAW] activity_start 전송 완료")
+                    logger.debug("[Live RAW] activity_start 전송 완료")
                 except (TypeError, ValueError, AttributeError) as e:
                     logger.debug("[Live RAW] activity_start 미지원(무시): %s", e)
 
@@ -496,7 +494,7 @@ class LiveSessionManager:
                         await send_fn(activity_end=ActivityEnd())
                     except (ImportError, AttributeError, TypeError):
                         await send_fn(activity_end=True)
-                    logger.info("[Live RAW] activity_end 전송 완료 (총 경과 %.3fs)", _time.perf_counter() - send_start)
+                    logger.debug("[Live RAW] activity_end 전송 완료 (총 경과 %.3fs)", _time.perf_counter() - send_start)
                 except (TypeError, ValueError, AttributeError) as e:
                     logger.debug("[Live RAW] activity_end 미지원(무시): %s", e)
 
@@ -510,29 +508,29 @@ class LiveSessionManager:
                     chunks.append(chunk)
             if not chunks:
                 chunks = [audio_bytes]
-            logger.info("[Live RAW] 청크 %d개로 전송 (청크당 최대 %d bytes ≈ 20ms)", len(chunks), CHUNK_BYTES)
+            logger.debug("[Live RAW] 청크 %d개로 전송 (청크당 최대 %d bytes ≈ 20ms)", len(chunks), CHUNK_BYTES)
 
             for idx, chunk in enumerate(chunks):
                 chunk_blob = types.Blob(data=chunk, mime_type=AUDIO_PCM_MIME)
                 await session.send_realtime_input(audio=chunk_blob)
                 if idx == 0:
                     first_chunk_at = _time.perf_counter() - send_start
-                    logger.info("[Live RAW] 첫 청크 전송 완료 (경과 %.3fs)", first_chunk_at)
+                    logger.debug("[Live RAW] 첫 청크 전송 완료 (경과 %.3fs)", first_chunk_at)
 
             last_chunk_at = _time.perf_counter() - send_start
-            logger.info("[Live RAW] 마지막 청크 전송 완료 (총 경과 %.3fs)", last_chunk_at)
+            logger.debug("[Live RAW] 마지막 청크 전송 완료 (총 경과 %.3fs)", last_chunk_at)
 
             try:
                 await session.send_realtime_input(audio_stream_end=True)
                 stream_end_at = _time.perf_counter() - send_start
-                logger.info("[Live RAW] audio_stream_end 전송 완료 (총 경과 %.3fs)", stream_end_at)
+                logger.debug("[Live RAW] audio_stream_end 전송 완료 (총 경과 %.3fs)", stream_end_at)
             except (TypeError, ValueError) as e:
-                logger.info("[Live RAW] audio_stream_end 미지원 또는 오류 (무시): %s", e)
+                logger.debug("[Live RAW] audio_stream_end 미지원 또는 오류 (무시): %s", e)
 
             # 턴 종료: activity_end (스트림 끝을 서버에 명시)
             await _send_activity_end()
 
-            logger.info("[Live RAW] 전송 끝. 전사 스트리밍 대기 (첫 이벤트 + 0.8s idle)...")
+            logger.info("[Live RAW] 전송 끝. 전사 스트리밍 대기 (최장 10s idle)...")
         except AttributeError as e:
             logger.info("[Live RAW] send_realtime_input 없음, send() 폴백 (한 번에 전송): %s", e)
             try:
