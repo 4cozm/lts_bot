@@ -84,6 +84,8 @@ async function handleCommand(cmd) {
     if (action === 'search_and_play' && cmd.query) {
       const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(cmd.query)}&lts_play=1`;
       chrome.tabs.create({ url });
+    } else if (action === 'play') {
+      chrome.tabs.create({ url: 'https://www.youtube.com/' });
     }
     return;
   }
